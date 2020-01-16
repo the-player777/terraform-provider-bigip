@@ -1128,9 +1128,23 @@ func resourceBigipLtmPolicyUpdate(d *schema.ResourceData, meta interface{}) erro
 	name := d.Id()
 	log.Println("[INFO] Updating  Policy " + name)
 	p := dataToPolicy(name, d)
-	err := client.UpdatePolicy(name, &p)
+	err := client.CreatePolicyDraft(name)
 	if err != nil {
-		log.Printf("[ERROR] Unable to Retrieve Policy   (%s) (%v) ", name, err)
+		log.Printf("[ERROR] Unable to Create Draft Policy   (%s) (%v) ", name, err)
+		return err
+	}
+	err = client.UpdatePolicy(name, &p)
+	if err != nil {
+		log.Printf("[ERROR] Unable to Update Draft Policy   (%s) (%v) ", name, err)
+		return err
+	}
+	published_copy := d.Get("published_copy").(string)
+	if published_copy == "" {
+		published_copy = "Drafts/" + name
+	}
+	err = client.PublishPolicy(name, published_copy)
+	if err != nil {
+		log.Printf("[ERROR] Unable to Publish Policy   (%s) (%v) ", name, err)
 		return err
 	}
 	return resourceBigipLtmPolicyRead(d, meta)
@@ -1198,19 +1212,45 @@ func policyToData(p *bigip.Policy, d *schema.ResourceData) error {
 		return fmt.Errorf("[DEBUG] Error saving Requires  state for Policy (%s): %s", d.Id(), err)
 	}
 
-	for i, r := range p.Rules {
+	log.Println("JNI-TEST policy: %v", p)
+	log.Println("JNI-TEST ID: %v", d.Id())
+	d.Set("name", p.Name)
+
+	log.Println("JNI-TEST ID after: %v", d.Id())
+
+	/*for i, r := range p.Rules {
 		rule := fmt.Sprintf("rule.%d", i)
 		d.Set(fmt.Sprintf("%s.name", rule), r.FullPath)
+		log.Printf("JNI-test gmd_I_hate_you: %v", d.Get("rule.1.name").(string))
+		log.Println("JNI-TEST fullpath: %v", r.FullPath)
+		log.Println("JNI-TEST fmt: %v", fmt.Sprintf("%s.name", rule))
 		for x, a := range r.Actions {
 			action := fmt.Sprintf("%s.action.%d", rule, x)
 			interfaceToResourceData(a, d, action)
+			log.Println("JNI-TEST action: %v", action)
 		}
 
 		for x, c := range r.Conditions {
 			condition := fmt.Sprintf("%s.condition.%d", rule, x)
 			interfaceToResourceData(c, d, condition)
+			log.Println("JNI-TEST condition: %v", condition)
 		}
+		log.Println("JNI-TEST rule: %v", rule)
+
+	}*/
+	rules, err := flattenPolicyRules(p.Rules, d)
+	if err != nil {
+		return err
 	}
+
+	err = d.Set("rule", rules)
+	if err != nil {
+		return err
+	}
+	log.Printf(rules.([]interface{})) 
+	log.Printf("JNI-test gmd_I_hate_you: %v", d.Get("rule").([]interface{}))
+	log.Printf("JNI-test gmd_I_hate_you: %v", d.Get("rule.0").(map[string]interface{}))
+	log.Printf("JNI-test gmd_I_hate_you: %v", d.Get("rule.1.name").(string))
 	return nil
 }
 
@@ -1222,7 +1262,93 @@ func interfaceToResourceData(obj interface{}, d *schema.ResourceData, prefix str
 			f := v.Field(fi)
 			if (f.Kind() == reflect.Slice && f.Interface() != nil) || f.Interface() != reflect.Zero(f.Type()).Interface() {
 				d.Set(fmt.Sprintf("%s.%s%s", prefix, strings.ToLower(fn[0:1]), fn[1:]), f.Interface())
+				log.Println("JNI-TEST interface: %v", f.Interface())
+				log.Println("JNI-TEST toto: %v", fmt.Sprintf("%s.%s%s", prefix, strings.ToLower(fn[0:1]), fn[1:]))
 			}
 		}
 	}
+}
+
+func flattenPolicyRules(in []bigip.PolicyRule, d *schema.ResourceData) ([]interface{}, error) {
+	att := make(map[string]interface{})
+
+	if len(in.Actions) > 0 {
+		v, err := flattenPolicyRuleActions(in.Actions)
+		if err != nil {
+			return []interface{}{att}, err
+		}
+		att["action"] = v
+	}
+
+	if len(in.Conditions) > 0 {
+		v, err := flattenPolicyRuleConditions(in.Conditions)
+		if err != nil {
+			return []interface{}{att}, err
+		}
+		att["action"] = v
+	}
+
+	return []interface{}{att}, nil
+}
+func flattenPolicyRuleActions(actions []bigip.PolicyRuleAction) ([]interface{}, error) {
+	att := make([]interface{}, len(actions))
+	for i, v := range actions {
+		obj := map[string]interface{}{}
+
+		if v.Name != "" {
+			obj["name"] = v.Name
+		}
+		if v.Forward != false {
+			obj["forward"] = v.Forward
+		}
+		if v.Request != false {
+			obj["request"] = v.Request
+		}
+		if v.Virtual != "" {
+			obj["virtual"] = v.Virtual
+		}
+
+		att[i] = obj
+	}
+	return att, nil
+}
+func flattenPolicyRuleConditions(conditions []bigip.PolicyRuleCondition) ([]interface{}, error) {
+	att := make([]interface{}, len(conditions))
+	for i, v := range conditions {
+		obj := map[string]interface{}{}
+
+		if v.Name != "" {
+			obj["name"] = v.Name
+		}
+		if v.Host != false {
+			obj["host"] = v.Host
+		}
+		if v.HttpHost != false {
+			obj["http_host"] = v.HttpHost
+		}
+		if v.HttpUri != false {
+			obj["http_uri"] = v.HttpUri
+		}
+		if v.Path != false {
+			obj["path"] = v.Path
+		}
+		if v.Request != false {
+			obj["request"] = v.Request
+		}
+		if v.StartsWith != false {
+			obj["starts_with"] = v.StartsWith
+		}
+		if v.EndsWith != false {
+			obj["ends_with"] = v.EndsWith
+		}
+		if v.Contains != false {
+			obj["contain"] = v.Contains
+		}
+		if len(v.Values) > 0 {
+			att["values"] = in.Values
+		}
+
+		att[i] = obj
+	}
+	return att, nil
 }
